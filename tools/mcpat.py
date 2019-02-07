@@ -96,6 +96,9 @@ def mcpat_bin():
     os.path.join(mcpatdir, 'mcpat-1.0')
 
 def mcpat_run(inputfile, outputfile):
+  # print '[PTSS] : McPAT Run command'
+  # print '[PTSS] : '+"LD_LIBRARY_PATH=$LD_LIBRARY_PATH:%s %s -print_level 5 -opt_for_clk 1 -infile %s > %s" % \
+  #   (mcpat_path(), mcpat_bin(), inputfile, outputfile)
   os.system("LD_LIBRARY_PATH=$LD_LIBRARY_PATH:%s %s -print_level 5 -opt_for_clk 1 -infile %s > %s" % \
     (mcpat_path(), mcpat_bin(), inputfile, outputfile))
 
@@ -124,7 +127,7 @@ all_names = buildstack.get_names(all_items)
 def get_all_names():
   return all_names
 
-def main(jobid, resultsdir, outputfile, powertype = 'dynamic', config = None, no_graph = False, partial = None, print_stack = True, return_data = False):
+def main(jobid, resultsdir, outputfile, powertype = 'dynamic', config = None, no_graph = False, partial = None, print_stack = True, return_data = False, active_cores = 1):
   tempfile = outputfile + '.xml'
 
   results = sniper_lib.get_results(jobid, resultsdir, partial = partial)
@@ -137,6 +140,7 @@ def main(jobid, resultsdir, outputfile, powertype = 'dynamic', config = None, no
   file(tempfile, "w").write('\n'.join(power))
 
   # Run McPAT
+  # print '[PTSS] : Input File to McPAT tool %s' % tempfile
   mcpat_run(tempfile, outputfile + '.txt')
 
   # Parse output
@@ -212,7 +216,7 @@ def main(jobid, resultsdir, outputfile, powertype = 'dynamic', config = None, no
   time0_begin = results['results']['global.time_begin']
   time0_end = results['results']['global.time_end']
   seconds = (time0_end - time0_begin)/1e15
-  results = power_stack(power_dat, powertype)
+  results = power_stack(power_dat, powertype, active_cores = active_cores)
   # Plot stack
   plot_labels = []
   plot_data = {}
@@ -274,7 +278,7 @@ def main(jobid, resultsdir, outputfile, powertype = 'dynamic', config = None, no
 
 
 
-def power_stack(power_dat, powertype = 'total', nocollapse = False):
+def power_stack(power_dat, powertype = 'total', nocollapse = False, active_cores = 1):
   def getpower(powers, key = None):
     def getcomponent(suffix):
       if key: return powers.get(key+'/'+suffix, 0)
@@ -293,9 +297,28 @@ def power_stack(power_dat, powertype = 'total', nocollapse = False):
       return getcomponent('Area') + getcomponent('Area Overhead')
     else:
       raise ValueError('Unknown powertype %s' % powertype)
+  
+  # active_cores = len(power_dat['Core'])
+  ncores = len(power_dat['Core'])
+  nL2    = len(power_dat.get('L2', []))
+  if active_cores > ncores:
+    raise ValueError('[PTSS] : #(active cores) <= #(available cores)')
+  if active_cores % 2 == 0 :
+    active_L2 = (active_cores / 2) # [PTSS-WARN-MAGIC] : This logic wil only work when the number of cores per L2  = 2
+  else :
+    active_L2 = (active_cores / 2) + 1
+  # active_L2 = active_cores
+  if active_L2 > nL2 :
+    print '[PTSS] : Number of L2 = %d' % nL2
+    print '[PTSS] : Active L2 = %d' % active_L2
+    raise ValueError('[PTSS] : #(active L2) <= #(available L2)')
+
+  # print('Active cores %d'%active_cores)
+  # print(len(power_dat['Core'][0:active_cores]))
+
   data = {
-    'l2':               sum([ getpower(cache) for cache in power_dat.get('L2', []) ])  # shared L2
-                        + sum([ getpower(core, 'L2') for core in power_dat['Core'] ]), # private L2
+    'l2':               sum([ getpower(cache) for cache in power_dat.get('L2', [])[0:active_L2] ])  # shared L2
+                        + sum([ getpower(core, 'L2') for core in power_dat['Core'][0:active_cores] ]), # private L2
     'l3':               sum([ getpower(cache) for cache in power_dat.get('L3', []) ]),
     'nuca':             sum([ getpower(cache) for cache in power_dat.get('NUCA', []) ]),
     'noc':              getpower(power_dat['Processor'], 'Total NoCs'),
@@ -304,27 +327,64 @@ def power_stack(power_dat, powertype = 'total', nocollapse = False):
                               + getpower(core, 'Execution Unit/Register Files')
                               + getpower(core, 'Execution Unit/Results Broadcast Bus')
                               + getpower(core, 'Renaming Unit')
-                              for core in power_dat['Core']
+                              for core in power_dat['Core'][0:active_cores]
                             ]),
     'core-ifetch':      sum([ getpower(core, 'Instruction Fetch Unit/Branch Predictor')
                               + getpower(core, 'Instruction Fetch Unit/Branch Target Buffer')
                               + getpower(core, 'Instruction Fetch Unit/Instruction Buffer')
                               + getpower(core, 'Instruction Fetch Unit/Instruction Decoder')
-                              for core in power_dat['Core']
+                              for core in power_dat['Core'][0:active_cores]
                             ]),
-    'icache':           sum([ getpower(core, 'Instruction Fetch Unit/Instruction Cache') for core in power_dat['Core'] ]),
-    'dcache':           sum([ getpower(core, 'Load Store Unit/Data Cache') for core in power_dat['Core'] ]),
-    'core-alu-complex': sum([ getpower(core, 'Execution Unit/Complex ALUs') for core in power_dat['Core'] ]),
-    'core-alu-fp':      sum([ getpower(core, 'Execution Unit/Floating Point Units') for core in power_dat['Core'] ]),
-    'core-alu-int':     sum([ getpower(core, 'Execution Unit/Integer ALUs') for core in power_dat['Core'] ]),
+    'icache':           sum([ getpower(core, 'Instruction Fetch Unit/Instruction Cache') for core in power_dat['Core'][0:active_cores] ]),
+    'dcache':           sum([ getpower(core, 'Load Store Unit/Data Cache') for core in power_dat['Core'][0:active_cores] ]),
+    'core-alu-complex': sum([ getpower(core, 'Execution Unit/Complex ALUs') for core in power_dat['Core'][0:active_cores] ]),
+    'core-alu-fp':      sum([ getpower(core, 'Execution Unit/Floating Point Units') for core in power_dat['Core'][0:active_cores] ]),
+    'core-alu-int':     sum([ getpower(core, 'Execution Unit/Integer ALUs') for core in power_dat['Core'][0:active_cores] ]),
     'core-mem':         sum([ getpower(core, 'Load Store Unit/LoadQ')
                               + getpower(core, 'Load Store Unit/StoreQ')
                               + getpower(core, 'Memory Management Unit')
-                              for core in power_dat['Core']
+                              for core in power_dat['Core'][0:active_cores]
                             ]),
   }
-  data['core-other'] = getpower(power_dat['Processor']) - (sum(data.values()) - data['dram'])
-  return buildstack.merge_items({ 0: data }, all_items, nocollapse = nocollapse)
+
+  # Complimentary Power Consumption (Power Consumption in un-allocated cores and L2 caches)
+  datac = {
+    'l2':               sum([ getpower(cache) for cache in power_dat.get('L2', [])[active_L2:nL2] ])  # shared L2
+                        + sum([ getpower(core, 'L2') for core in power_dat['Core'][active_cores:ncores] ]), # private L2
+    'core':             sum([ getpower(core, 'Execution Unit/Instruction Scheduler')
+                              + getpower(core, 'Execution Unit/Register Files')
+                              + getpower(core, 'Execution Unit/Results Broadcast Bus')
+                              + getpower(core, 'Renaming Unit')
+                              for core in power_dat['Core'][active_cores:ncores]
+                            ]),
+    'core-ifetch':      sum([ getpower(core, 'Instruction Fetch Unit/Branch Predictor')
+                              + getpower(core, 'Instruction Fetch Unit/Branch Target Buffer')
+                              + getpower(core, 'Instruction Fetch Unit/Instruction Buffer')
+                              + getpower(core, 'Instruction Fetch Unit/Instruction Decoder')
+                              for core in power_dat['Core'][active_cores:ncores]
+                            ]),
+    'icache':           sum([ getpower(core, 'Instruction Fetch Unit/Instruction Cache') for core in power_dat['Core'][active_cores:ncores] ]),
+    'dcache':           sum([ getpower(core, 'Load Store Unit/Data Cache') for core in power_dat['Core'][active_cores:ncores] ]),
+    'core-alu-complex': sum([ getpower(core, 'Execution Unit/Complex ALUs') for core in power_dat['Core'][active_cores:ncores] ]),
+    'core-alu-fp':      sum([ getpower(core, 'Execution Unit/Floating Point Units') for core in power_dat['Core'][active_cores:ncores] ]),
+    'core-alu-int':     sum([ getpower(core, 'Execution Unit/Integer ALUs') for core in power_dat['Core'][active_cores:ncores] ]),
+    'core-mem':         sum([ getpower(core, 'Load Store Unit/LoadQ')
+                              + getpower(core, 'Load Store Unit/StoreQ')
+                              + getpower(core, 'Memory Management Unit')
+                              for core in power_dat['Core'][active_cores:ncores]
+                            ]),
+  }
+  total_unallocated_power = datac['l2'] + datac['core'] + datac['core-ifetch'] + datac['icache'] + datac['dcache'] + \
+  datac['core-alu-complex'] + datac['core-alu-fp'] + datac['core-alu-int'] + datac['core-mem']
+  # print 'PTSS : Unallocated-Core Power : %f'%total_unallocated_power
+
+  data['core-other'] = (getpower(power_dat['Processor']) - total_unallocated_power) - (sum(data.values()) - data['dram'])
+  # print '[PTSS] : Power Data'
+  # print(data)
+  reslt2 = buildstack.merge_items({ 0: data }, all_items, nocollapse = nocollapse)
+  # print 'PTSS : Power Data (Modified)'
+  # print(reslt2)
+  return reslt2
 
 
 def edit_XML(statsobj, stats, cfg):
@@ -1251,7 +1311,7 @@ def readTemplate(ncores, num_l2s, private_l2s, num_l3s, technology_node):
 
 if __name__ == '__main__':
   def usage():
-    print 'Usage:', sys.argv[0], '[-h (help)] [-j <jobid> | -d <resultsdir (default: .)>] [-t <type: %s>] [-c <override-config>] [-o <output-file (power{.png,.txt,.py})>]' % '|'.join(powertypes)
+    print 'Usage:', sys.argv[0], '[-h (help)] [-j <jobid> | -d <resultsdir (default: .)>] [-a <active_cores>] [-t <type: %s>] [-c <override-config>] [-o <output-file (power{.png,.txt,.py})>]' % '|'.join(powertypes)
     sys.exit(-1)
 
   jobid = 0
@@ -1263,9 +1323,10 @@ if __name__ == '__main__':
   no_graph = False
   no_text = False
   partial = None
+  active_cores = 1
 
   try:
-    opts, args = getopt.getopt(sys.argv[1:], "hj:t:c:d:o:", [ 'no-graph', 'no-text', 'partial=' ])
+    opts, args = getopt.getopt(sys.argv[1:], "hj:t:c:d:o:a:", [ 'no-graph', 'no-text', 'partial=' ])
   except getopt.GetoptError, e:
     print e
     usage()
@@ -1285,6 +1346,8 @@ if __name__ == '__main__':
       config = a
     if o == '-o':
       outputfile = a
+    if o == '-a' :
+      active_cores = int(a)
     if o == '--no-graph':
       no_graph = True
     if o == '--no-text':
@@ -1295,5 +1358,5 @@ if __name__ == '__main__':
         usage()
       partial = a.split(':')
 
-
-  main(jobid = jobid, resultsdir = resultsdir, powertype = powertype, config = config, outputfile = outputfile, no_graph = no_graph, print_stack = not no_text, partial = partial)
+  # print '[PTSS] : McPAT.py-main value of active_cores %d' % active_cores
+  main(jobid = jobid, resultsdir = resultsdir, powertype = powertype, config = config, outputfile = outputfile, no_graph = no_graph, print_stack = not no_text, partial = partial, active_cores = active_cores)

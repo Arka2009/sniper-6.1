@@ -13,6 +13,7 @@ def usage():
   print 'Usage:'
   print '  %s' % sys.argv[0] + \
         '  [-n <ncores (1)>]' + \
+        '  [-a <active_cores (1)>]' + \
         '  [-d <outputdir (.)>]' + \
         '  [-c <sniper-config>]' + \
         '  [-c [objname:]<name[.cfg]>,<name2[.cfg]>,...]' + \
@@ -56,6 +57,7 @@ def usage():
 
 standalone = False
 ncores = 1
+active_cores = 1
 outputdir = '.'
 configfiles = []
 sniperoptions = []
@@ -189,7 +191,7 @@ record_trace_passthrough = [ 'pid-continue', 'stop-address=' ]
 try:
   opts, cmdline = getopt.getopt(
     sys.argv[1:],
-    "hvn:m:d:c:g:s:",
+    "hvn:a:m:d:c:g:s:",
     [
       "roi", "roi-script",
       "viz", "viz-aso",
@@ -223,6 +225,8 @@ for o, a in opts:
     verbose = True
   if o == '-n':
     ncores = int(a)
+  if o == '-a':
+    active_cores = int(a)
   if o == '-d':
     outputdir = a
   if o == '-c':
@@ -870,7 +874,8 @@ elif os.path.exists(os.path.join(outputdir, 'sim.cfg')):
 
   if run_power:
     print '[SNIPER] Running McPAT'
-    os.system('%(sim_root)s/tools/mcpat.py -d %(outputdir)s -o %(outputdir)s/power' % locals())
+    #print '[PTSS] : '+'%(sim_root)s/tools/mcpat.py -d %(outputdir)s -o %(outputdir)s/power -a %(active_cores)s' % locals()
+    os.system('%(sim_root)s/tools/mcpat.py -d %(outputdir)s -o %(outputdir)s/power -a %(active_cores)s' % locals())
 
   if use_viz:
     print '[SNIPER] Generating visualization in viz/'
